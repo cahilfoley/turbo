@@ -627,14 +627,14 @@ impl Task {
         match dep {
             TaskEdge::Output(task) => {
                 backend.with_task(task, |task| {
-                    task.with_output_mut_if_available(|output| {
+                    task.access_output_for_removing_dependents(|output| {
                         output.dependent_tasks.remove(&reader);
                     });
                 });
             }
             TaskEdge::Cell(task, index) => {
                 backend.with_task(task, |task| {
-                    task.with_cell_mut_if_available(index, |cell| {
+                    task.access_cell_for_removing_dependents(index, |cell| {
                         cell.remove_dependent_task(reader);
                     });
                 });
@@ -897,6 +897,7 @@ impl Task {
         duration: Duration,
         memory_usage: usize,
         generation: NonZeroU32,
+        cell_counters: AutoMap<ValueTypeId, u32, BuildHasherDefault<FxHasher>, 8>,
         stateful: bool,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
@@ -906,6 +907,7 @@ impl Task {
         {
             let mut change_job = None;
             let mut remove_job = None;
+            let mut drained_cells = SmallVec::<[Cell; 8]>::new();
             let mut dependencies = DEPENDENCIES_TO_TRACK.with(|deps| deps.take());
             {
                 let mut state = self.full_state_mut();
@@ -913,6 +915,12 @@ impl Task {
                 state
                     .gc
                     .execution_completed(duration, memory_usage, generation);
+                for (value_type, cells) in state.cells.iter_mut() {
+                    let counter = cell_counters.get(value_type).copied().unwrap_or_default();
+                    if counter != cells.len() as u32 {
+                        drained_cells.extend(cells.drain(counter as usize..));
+                    }
+                }
                 match state.state_type {
                     InProgress(box InProgressState {
                         ref mut event,
@@ -999,6 +1007,9 @@ impl Task {
             }
             if !dependencies.is_empty() {
                 self.clear_dependencies(dependencies, backend, turbo_tasks);
+            }
+            for cell in drained_cells {
+                cell.gc_drop(turbo_tasks);
             }
             change_job.apply(&aggregation_context);
             remove_job.apply(&aggregation_context);
@@ -1264,7 +1275,7 @@ impl Task {
     }
 
     /// Access to the output cell.
-    pub(crate) fn with_output_mut_if_available<T>(
+    pub(crate) fn access_output_for_removing_dependents<T>(
         &self,
         func: impl FnOnce(&mut Output) -> T,
     ) -> Option<T> {
@@ -1276,11 +1287,11 @@ impl Task {
     }
 
     /// Access to a cell.
-    pub(crate) fn with_cell_mut<T>(
+    pub(crate) fn access_cell_for_read<T>(
         &self,
         index: CellId,
         gc_queue: Option<&GcQueue>,
-        func: impl FnOnce(&mut Cell, bool) -> T,
+        func: impl FnOnce(Option<&mut Cell>) -> T,
     ) -> T {
         let mut state = self.full_state_mut();
         if let Some(gc_queue) = gc_queue {
@@ -1289,6 +1300,22 @@ impl Task {
                 let _ = gc_queue.task_accessed(self.id);
             }
         }
+        let list = state.cells.entry(index.type_id).or_default();
+        let i = index.index as usize;
+        if list.len() <= i {
+            func(None)
+        } else {
+            func(Some(&mut list[i]))
+        }
+    }
+
+    /// Access to a cell.
+    pub(crate) fn access_cell_for_write<T>(
+        &self,
+        index: CellId,
+        func: impl FnOnce(&mut Cell, bool) -> T,
+    ) -> T {
+        let mut state = self.full_state_mut();
         let clean = match state.state_type {
             InProgress(box InProgressState { clean, .. }) => clean,
             _ => false,
@@ -1302,7 +1329,7 @@ impl Task {
     }
 
     /// Access to a cell.
-    pub(crate) fn with_cell_mut_if_available<T>(
+    pub(crate) fn access_cell_for_removing_dependents<T>(
         &self,
         index: CellId,
         func: impl FnOnce(&mut Cell) -> T,
