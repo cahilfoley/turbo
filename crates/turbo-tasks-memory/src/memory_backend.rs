@@ -21,7 +21,7 @@ use turbo_prehash::{BuildHasherExt, PassThroughHash, PreHashed};
 use turbo_tasks::{
     backend::{
         Backend, BackendJobId, CellContent, PersistentTaskType, TaskExecutionSpec,
-        TransientTaskType,
+        TransientTaskType, TypedCellContent,
     },
     event::EventListener,
     util::{IdFactory, NoMoveVec},
@@ -394,11 +394,13 @@ impl Backend for MemoryBackend {
         index: CellId,
         reader: TaskId,
         turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
-    ) -> Result<Result<CellContent, EventListener>> {
+    ) -> Result<Result<TypedCellContent, EventListener>> {
         if task_id == reader {
-            Ok(Ok(self.with_task(task_id, |task| {
-                task.with_cell(index, |cell| cell.read_own_content_untracked())
-            })))
+            Ok(Ok(self
+                .with_task(task_id, |task| {
+                    task.with_cell(index, |cell| cell.read_own_content_untracked())
+                })
+                .into_typed(index.type_id)))
         } else {
             Task::add_dependency_to_current(TaskEdge::Cell(task_id, index));
             self.with_task(task_id, |task| {
@@ -409,7 +411,7 @@ impl Backend for MemoryBackend {
                         move || format!("reading {} {} from {}", task_id, index, reader),
                     )
                 }) {
-                    Ok(content) => Ok(Ok(content)),
+                    Ok(content) => Ok(Ok(content.into_typed(index.type_id))),
                     Err(RecomputingCell { listener, schedule }) => {
                         if schedule {
                             task.recompute(self, turbo_tasks);
@@ -426,9 +428,10 @@ impl Backend for MemoryBackend {
         current_task: TaskId,
         index: CellId,
         _turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
-    ) -> Result<CellContent> {
+    ) -> Result<TypedCellContent> {
         Ok(self.with_task(current_task, |task| {
             task.with_cell(index, |cell| cell.read_own_content_untracked())
+                .into_typed(index.type_id)
         }))
     }
 
@@ -437,7 +440,7 @@ impl Backend for MemoryBackend {
         task_id: TaskId,
         index: CellId,
         turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
-    ) -> Result<Result<CellContent, EventListener>> {
+    ) -> Result<Result<TypedCellContent, EventListener>> {
         self.with_task(task_id, |task| {
             match task.with_cell_mut(index, self.gc_queue.as_ref(), |cell| {
                 cell.read_content_untracked(
@@ -445,7 +448,7 @@ impl Backend for MemoryBackend {
                     move || format!("reading {} {} untracked", task_id, index),
                 )
             }) {
-                Ok(content) => Ok(Ok(content)),
+                Ok(content) => Ok(Ok(content.into_typed(index.type_id))),
                 Err(RecomputingCell { listener, schedule }) => {
                     if schedule {
                         task.recompute(self, turbo_tasks);
@@ -491,6 +494,9 @@ impl Backend for MemoryBackend {
         });
     }
 
+    /// SAFETY: This function does not validate that the data in `content` is of
+    /// the same type as in `index`. It is the caller's responsibility to ensure
+    /// that the content is of the correct type.
     fn update_task_cell(
         &self,
         task: TaskId,

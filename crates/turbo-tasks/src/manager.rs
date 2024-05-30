@@ -24,13 +24,17 @@ use tracing::{info_span, instrument, trace_span, Instrument, Level};
 use turbo_tasks_malloc::TurboMalloc;
 
 use crate::{
-    backend::{Backend, CellContent, PersistentTaskType, TaskExecutionSpec, TransientTaskType},
+    backend::{
+        Backend, CellContent, PersistentTaskType, TaskExecutionSpec, TransientTaskType,
+        TypedCellContent,
+    },
     capture_future::{self, CaptureFuture},
     event::{Event, EventListener},
     id::{BackendJobId, FunctionId, TraitTypeId},
     id_factory::IdFactory,
     raw_vc::{CellId, RawVc},
     registry,
+    task::concrete_task_input::TypedSharedReference,
     trace::TraceRawVcs,
     util::StaticOrArc,
     vc::ReadVcFuture,
@@ -91,7 +95,7 @@ pub trait TurboTasksApi: TurboTasksCallApi + Sync + Send {
         &self,
         task: TaskId,
         index: CellId,
-    ) -> Result<Result<CellContent, EventListener>>;
+    ) -> Result<Result<TypedCellContent, EventListener>>;
 
     /// INVALIDATION: Be careful with this, it will not track dependencies, so
     /// using it could break cache invalidation.
@@ -99,7 +103,7 @@ pub trait TurboTasksApi: TurboTasksCallApi + Sync + Send {
         &self,
         task: TaskId,
         index: CellId,
-    ) -> Result<Result<CellContent, EventListener>>;
+    ) -> Result<Result<TypedCellContent, EventListener>>;
 
     fn read_task_collectibles(&self, task: TaskId, trait_id: TraitTypeId) -> AutoMap<RawVc, i32>;
 
@@ -113,9 +117,9 @@ pub trait TurboTasksApi: TurboTasksCallApi + Sync + Send {
         &self,
         current_task: TaskId,
         index: CellId,
-    ) -> Result<CellContent>;
+    ) -> Result<TypedCellContent>;
 
-    fn read_own_task_cell(&self, task: TaskId, index: CellId) -> Result<CellContent>;
+    fn read_own_task_cell(&self, task: TaskId, index: CellId) -> Result<TypedCellContent>;
     fn update_own_task_cell(&self, task: TaskId, index: CellId, content: CellContent);
     fn mark_own_task_as_finished(&self, task: TaskId);
 
@@ -908,7 +912,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
         &self,
         task: TaskId,
         index: CellId,
-    ) -> Result<Result<CellContent, EventListener>> {
+    ) -> Result<Result<TypedCellContent, EventListener>> {
         self.backend
             .try_read_task_cell(task, index, current_task("reading Vcs"), self)
     }
@@ -917,7 +921,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
         &self,
         task: TaskId,
         index: CellId,
-    ) -> Result<Result<CellContent, EventListener>> {
+    ) -> Result<Result<TypedCellContent, EventListener>> {
         self.backend.try_read_task_cell_untracked(task, index, self)
     }
 
@@ -925,7 +929,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
         &self,
         current_task: TaskId,
         index: CellId,
-    ) -> Result<CellContent> {
+    ) -> Result<TypedCellContent> {
         self.backend
             .try_read_own_task_cell_untracked(current_task, index, self)
     }
@@ -972,7 +976,7 @@ impl<B: Backend + 'static> TurboTasksApi for TurboTasks<B> {
         }
     }
 
-    fn read_own_task_cell(&self, task: TaskId, index: CellId) -> Result<CellContent> {
+    fn read_own_task_cell(&self, task: TaskId, index: CellId) -> Result<TypedCellContent> {
         // INVALIDATION: don't need to track a dependency to itself
         self.try_read_own_task_cell_untracked(task, index)
     }
@@ -1427,7 +1431,7 @@ pub(crate) async fn read_task_cell(
     this: &dyn TurboTasksApi,
     id: TaskId,
     index: CellId,
-) -> Result<CellContent> {
+) -> Result<TypedCellContent> {
     loop {
         match this.try_read_task_cell(id, index)? {
             Ok(result) => return Ok(result),
@@ -1463,10 +1467,7 @@ impl CurrentCellRef {
             tt.update_own_task_cell(
                 self.current_task,
                 self.index,
-                CellContent(Some(SharedReference::new(
-                    Some(self.index.type_id),
-                    triomphe::Arc::new(update),
-                ))),
+                CellContent(Some(SharedReference::new(triomphe::Arc::new(update)))),
             )
         }
     }
@@ -1487,23 +1488,24 @@ impl CurrentCellRef {
         tt.update_own_task_cell(
             self.current_task,
             self.index,
-            CellContent(Some(SharedReference::new(
-                Some(self.index.type_id),
-                triomphe::Arc::new(new_content),
-            ))),
+            CellContent(Some(SharedReference::new(triomphe::Arc::new(new_content)))),
         )
     }
 
-    pub fn update_shared_reference(&self, shared_ref: SharedReference) {
+    pub fn update_shared_reference(&self, shared_ref: TypedSharedReference) {
         let tt = turbo_tasks();
         let content = tt.read_own_task_cell(self.current_task, self.index).ok();
-        let update = if let Some(CellContent(Some(content))) = content {
-            content != shared_ref
+        let update = if let Some(TypedCellContent(_, CellContent(shared_ref_exp))) = content {
+            shared_ref_exp.as_ref().ne(&Some(&shared_ref.1))
         } else {
             true
         };
         if update {
-            tt.update_own_task_cell(self.current_task, self.index, CellContent(Some(shared_ref)))
+            tt.update_own_task_cell(
+                self.current_task,
+                self.index,
+                CellContent(Some(shared_ref.1)),
+            )
         }
     }
 }
