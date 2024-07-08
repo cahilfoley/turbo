@@ -446,6 +446,7 @@ pub enum GcResult {
     /// from the graph and only makes sense when the task isn't currently
     /// active.
     Unloaded,
+    AlreadyUnloaded,
 }
 
 pub enum ReadCellError {
@@ -1754,9 +1755,9 @@ impl Task {
             }
             TaskMetaStateWriteGuard::Partial(mut state) => {
                 state.aggregation_node.shrink_to_fit();
-                GcResult::Unloaded
+                GcResult::AlreadyUnloaded
             }
-            TaskMetaStateWriteGuard::Unloaded(_) => GcResult::Unloaded,
+            TaskMetaStateWriteGuard::Unloaded(_) => GcResult::AlreadyUnloaded,
             TaskMetaStateWriteGuard::TemporaryFiller => unreachable!(),
         }
     }
