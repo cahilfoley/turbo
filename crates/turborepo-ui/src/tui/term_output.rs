@@ -138,4 +138,8 @@ impl<W> TerminalOutput<W> {
         }
         Ok(())
     }
+
+    pub fn copy_selection(&self) -> Option<String> {
+        self.parser.screen().selected_text()
+    }
 }

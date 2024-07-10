@@ -312,6 +312,17 @@ impl<W> App<W> {
 
         Ok(())
     }
+
+    pub fn copy_selection(&self) {
+        let task = self
+            .tasks
+            .get(&self.active_task())
+            .expect("active task should exist");
+        let Some(text) = task.copy_selection() else {
+            return;
+        };
+        super::copy_to_clipboard(&text);
+    }
 }
 
 impl<W: Write> App<W> {
@@ -517,6 +528,9 @@ fn update(
         }
         Event::Mouse(m) => {
             app.handle_mouse(m)?;
+        }
+        Event::CopySelection => {
+            app.copy_selection();
         }
     }
     Ok(None)
