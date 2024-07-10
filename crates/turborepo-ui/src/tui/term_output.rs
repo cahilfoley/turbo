@@ -10,6 +10,37 @@ pub struct TerminalOutput<W> {
     pub parser: vt100::Parser,
     pub stdin: Option<W>,
     pub status: Option<String>,
+    selection: Option<SelectionState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SelectionState {
+    start: Pos,
+    end: Pos,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Pos {
+    pub x: u16,
+    pub y: u16,
+}
+
+impl SelectionState {
+    pub fn new(event: crossterm::event::MouseEvent) -> Self {
+        let start = Pos {
+            x: event.column,
+            y: event.row,
+        };
+        let end = start;
+        Self { start, end }
+    }
+
+    pub fn update(&mut self, event: crossterm::event::MouseEvent) {
+        self.end = Pos {
+            x: event.column,
+            y: event.row,
+        };
+    }
 }
 
 impl<W> TerminalOutput<W> {
@@ -20,6 +51,7 @@ impl<W> TerminalOutput<W> {
             rows,
             cols,
             status: None,
+            selection: None,
         }
     }
 
@@ -63,6 +95,47 @@ impl<W> TerminalOutput<W> {
         }
         stdout.write_all("└────>\r\n".as_bytes())?;
 
+        Ok(())
+    }
+
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) -> Result<(), Error> {
+        match event.kind {
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                // Here we enter copy mode with this position
+                let selection = SelectionState::new(event);
+                // we now store this in the task
+                self.selection = Some(selection);
+            }
+            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                // Here we change an endpoint of the selection
+                // Should be noted that it can go backwards
+                // If we didn't catch the start of a selection, use the current position
+                let selection = self
+                    .selection
+                    .get_or_insert_with(|| SelectionState::new(event));
+                selection.update(event);
+                // Update selection of underlying parser
+                self.parser.screen_mut().set_selection(
+                    selection.start.y,
+                    selection.start.x,
+                    selection.end.y,
+                    selection.end.x,
+                );
+            }
+            // Scrolling is handled elsewhere
+            crossterm::event::MouseEventKind::ScrollDown => (),
+            crossterm::event::MouseEventKind::ScrollUp => (),
+            // I think we can ignore this?
+            crossterm::event::MouseEventKind::Moved => (),
+            // Don't care about other mouse buttons
+            crossterm::event::MouseEventKind::Down(_) => (),
+            crossterm::event::MouseEventKind::Drag(_) => (),
+            // We don't support horizontal scroll
+            crossterm::event::MouseEventKind::ScrollLeft
+            | crossterm::event::MouseEventKind::ScrollRight => (),
+            // Cool, person stopped holding down mouse
+            crossterm::event::MouseEventKind::Up(_) => (),
+        }
         Ok(())
     }
 }
