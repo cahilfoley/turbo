@@ -56,7 +56,6 @@ pub use turbopack_css as css;
 pub use turbopack_ecmascript as ecmascript;
 use turbopack_ecmascript::references::external_module::{CachedExternalModule, CachedExternalType};
 use turbopack_json::JsonModuleAsset;
-use turbopack_mdx::MdxModuleAsset;
 pub use turbopack_resolve::{resolve::resolve_options, resolve_options_context};
 use turbopack_resolve::{resolve_options_context::ResolveOptionsContext, typescript::type_resolve};
 use turbopack_static::StaticModuleAsset;
