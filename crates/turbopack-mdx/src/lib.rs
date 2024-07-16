@@ -179,11 +179,6 @@ impl MdxTransformedAsset {
         let mdx_jsx_component =
             compile(&file.content().to_str()?, &options).map_err(|e| anyhow!("{}", e))?;
 
-        // let source = VirtualSource::new_with_ident(
-        //     this.source.ident(),
-        //     AssetContent::file(File::from(Rope::from(mdx_jsx_component)).into()),
-        // );
-
         Ok(MdxTransformResult {
             content: AssetContent::file(File::from(Rope::from(mdx_jsx_component)).into()),
         }
