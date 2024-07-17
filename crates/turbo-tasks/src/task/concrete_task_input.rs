@@ -428,6 +428,7 @@ impl From<RawVc> for ConcreteTaskInput {
         match raw_vc {
             RawVc::TaskOutput(task) => ConcreteTaskInput::TaskOutput(task),
             RawVc::TaskCell(task, i) => ConcreteTaskInput::TaskCell(task, i),
+            RawVc::LocalCell(_, _) => todo!(),
         }
     }
 }

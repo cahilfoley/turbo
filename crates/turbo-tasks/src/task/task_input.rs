@@ -225,6 +225,7 @@ where
         match self.node {
             RawVc::TaskCell(task, index) => ConcreteTaskInput::TaskCell(task, index),
             RawVc::TaskOutput(task) => ConcreteTaskInput::TaskOutput(task),
+            RawVc::LocalCell(_, _) => todo!(),
         }
     }
 }
